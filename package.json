@@ -1,0 +1,14 @@
+{
+  "name": "youdao-webfanyi-node-api",
+  "version": "0.1.0",
+  "description": "Local OpenAI-compatible streaming adapter for Youdao webfanyi LLM endpoints.",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs"
+  }
+}
