@@ -1,8 +1,21 @@
 # Youdao Luna OpenAI Proxy
 
-本地 OpenAI 兼容的聊天补全代理。它把有道网页端 LLM（[luna-ai](https://luna-ai.youdao.com)，模型回答为 DeepSeek V3）转成 `/v1/chat/completions`，供本机上的 OpenAI 客户端直接调用。
+本地 OpenAI 风格的聊天代理。它只提供三个接口：`GET /health`、`GET /v1/models`、`POST /v1/chat/completions`。上游是有道网页 LLM（[luna-ai](https://luna-ai.youdao.com)，函数名 `deepseek_r1`，回答为 DeepSeek V3）。这不是有道官方 API，也不是翻译服务。
 
-这不是有道官方 API，也不是翻译服务。不需要 API Key 或 Cookie。每次请求向 `https://luna-ai.youdao.com` 拉取临时凭据，只在内存里计算签名；凭据不会写到磁盘，也不会返回给客户端。
+不需要 API Key 或 Cookie。每次请求向 `https://luna-ai.youdao.com` 拉取临时凭据，只在内存里计算签名；凭据不会写到磁盘，也不会返回给客户端。
+
+## 能力边界
+
+可以接到 Codex 等客户端，当作纯聊天模型使用。工具调用、画图、子 agent、上下文压缩这些高级能力，需要客户端自己或其他正规 API 提供。本代理不实现它们。
+
+明确不支持：
+
+- `tools` / `function_call`（工具调用）
+- 画图、图像生成，以及多模态输入输出
+- 子 agent / 多 agent 编排 API
+- 服务端上下文压缩。超长对话只硬截最后 12000 个字符，前缀直接丢掉
+- `max_tokens`、`usage`，以及按 model id 路由到不同的真实上游模型
+- Codex 等客户端的高级能力（新绘画、子 agent、压缩上下文等）。这里只能当纯聊天后端
 
 ## Requirements
 
