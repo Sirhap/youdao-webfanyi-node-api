@@ -69,4 +69,4 @@ curl http://127.0.0.1:8787/v1/chat/completions \
 
 上游地址和请求协议可能随时变化，本仓库不保证长期兼容。不要把这个服务暴露到公网：默认没有鉴权。若必须对外提供，请自行加上认证、限流和访问控制。
 
-2026-10-04（Asia/Shanghai）的限额与压力测试见 [docs/压测报告.md](docs/压测报告.md)。中等并发下可以作为日常 LLM 代理使用；不要信任大约 8k 以上的上下文。
+当前能做什么、不能依赖什么，见 [docs/能力边界.md](docs/能力边界.md)。2026-10-04（Asia/Shanghai）的限额与压力测试见 [docs/压测报告.md](docs/压测报告.md)，原始日志见 [docs/evidence/youdao-luna-proxy-limit-test-2026-10-04.txt](docs/evidence/youdao-luna-proxy-limit-test-2026-10-04.txt)。那次实测可以作为单人日常代理，也撑住了测到的中等并发；不要信任大约 8k 字符以上的上下文。
