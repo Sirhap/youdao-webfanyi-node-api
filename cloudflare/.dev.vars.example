@@ -1,0 +1,4 @@
+# Public API password. Generate a unique value: openssl rand -hex 32
+# Clients send: Authorization: Bearer <GATEWAY_TOKEN>
+# The placeholder below is rejected by the Worker. Replace it before deploying.
+GATEWAY_TOKEN=replace-with-a-long-random-string

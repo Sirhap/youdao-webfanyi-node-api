@@ -1,0 +1,18 @@
+{
+  "name": "youdao-luna-openai-proxy-worker",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Workers OpenAI-compatible API proxy for Youdao luna-ai. Local Node entry remains server.mjs.",
+  "scripts": {
+    "check": "node --check src/index.js && node --check src/luna.js",
+    "test": "node --test src/worker.test.mjs",
+    "deploy": "npx wrangler deploy"
+  },
+  "cloudflare": {
+    "bindings": {
+      "GATEWAY_TOKEN": {
+        "description": "公网 Bearer 口令。客户端请求头为 `Authorization: Bearer <这个值>`。用 `openssl rand -hex 32` 生成，替换示例占位符。未配置时接口返回 503。"
+      }
+    }
+  }
+}
