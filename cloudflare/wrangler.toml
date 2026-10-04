@@ -1,0 +1,9 @@
+name = "youdao-luna-openai-proxy"
+main = "src/index.js"
+compatibility_date = "2026-10-04"
+compatibility_flags = ["nodejs_compat"]
+
+# Public non-secret settings. GATEWAY_TOKEN is a secret; see .dev.vars.example.
+[vars]
+YOUDAO_ORIGIN = "https://luna-ai.youdao.com"
+CORS_ORIGIN = "*"
