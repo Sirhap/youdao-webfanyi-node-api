@@ -1,0 +1,417 @@
+Youdao Luna proxy limit test
+when=2026-10-04 18:13:26 CST host=127.0.0.1:8787 model_under_test=DeepSeek-V3
+repo=/workspace/youdao-webfanyi-node-api git=b4a4bcf pid=809995 rss=73688 kB
+Probe before suite: DeepSeek-V3 HTTP 200 in ~3.99s; DeepSeek-V4 HTTP 200 in ~3.13s. Suite uses DeepSeek-V3.
+Server was already `npm start` (node server.mjs). Not restarted. No git commit/push.
+Upstream per request: secret + uuid + chat. Input slice(-12000). Body limit 1MB. No token usage in responses.
+Timeouts: short=45s med=90s long=150s. Concurrency verdict: PASS>=80% DEGRADED>=50% else FAIL.
+Approx tokens are a local heuristic (CJK/1.5 + other/4), not provider usage.
+self_check context builder OK
+
+## PHASE health 18:13:26
+
+==============================================================================
+1) HEALTH + /v1/models
+==============================================================================
+GET /health status=200 lat=0.001s body={"status":"ok","upstream":"youdao-webfanyi"}
+GET /v1/models status=200 lat=0.001s body={"object":"list","data":[{"id":"DeepSeek-V4","object":"model","owned_by":"youdao-webfanyi"}]}
+CASE1 PASS models_list_has_V4=True models_list_has_V3=False
+FINDING: 模型列表只暴露 DeepSeek-V4；聊天请求里的 model 字段不会被校验，DeepSeek-V3 也能 200（id 只是回显）。源码 functionEnglishName 固定为 deepseek_r1，换 model id 不会切换上游模型。
+
+## PHASE baseline 18:13:26
+
+==============================================================================
+2) SHORT CHAT BASELINE n=5 model=DeepSeek-V3 stream=false
+==============================================================================
+  #1 status=200 lat=2.99s chars=3 finish=stop hit4=True snippet=  4 err=
+  #2 status=200 lat=2.74s chars=3 finish=stop hit4=True snippet=  4 err=
+  #3 status=200 lat=3.10s chars=3 finish=stop hit4=True snippet=  4 err=
+  #4 status=200 lat=2.96s chars=3 finish=stop hit4=True snippet=  4 err=
+  #5 status=200 lat=3.72s chars=3 finish=stop hit4=True snippet=  4 err=
+SUMMARY baseline_n5: PASS success=5/5 (100.0%) wall=15.52s achieved_rps=0.32
+  latency_ok n=5 mean=3.10s p50=2.99s p95=3.60s min=2.74s max=3.72s
+  latency_all n=5 mean=3.10s p50=2.99s p95=3.60s min=2.74s max=3.72s
+  status_hist {"200": 5}
+  out_chars_ok mean=3 min=3 max=3
+CASE2 PASS hit4=5/5
+
+## PHASE stream 18:13:41
+
+==============================================================================
+3) STREAMING VS NON-STREAM same prompt
+==============================================================================
+  nonstream status=200 lat=3.96s chars=81 finish=stop ctype=application/json; charset=utf-8 snippet=  光合作用是植物利用光能，在叶绿体内将二氧化碳和水转化为储存能量的有机物，并释放氧气的过程。叶绿体作为这一反应的场所，凭借其中的色素和酶捕捉光能并驱动化学合成。 err=
+  stream status=200 lat=4.52s ttfb=3.730829531996278 chars=93 finish=stop ctype=text/event-stream; charset=utf-8 lines=101 snippet=  光合作用是植物通过叶绿体吸收光能，将二氧化碳和水转化为储存能量的有机物并释放氧气的过程。正是在这些微小的叶绿体中，光能被捕获并转化为化学能，从而驱动了地球上几乎所有生命的生存与繁衍。 err=
+  omit_stream_field status=200 ctype=text/event-stream; charset=utf-8 lat=3.15s chars=4 snippet=  OK
+CASE3 PASS stream_chars/nonstream_chars=1.1481481481481481 omit_stream_defaults_to_sse=True
+FINDING: 未传 stream 时默认走 SSE（源码 stream !== false），与 OpenAI 默认非流式不兼容。客户端必须显式 stream:false。
+FINDING: 同提示流式首包 ttfb=3.73s，非流式总耗时 3.96s。
+
+## PHASE context 18:13:53
+
+==============================================================================
+4) GROWING CONTEXT 1k/4k/8k/16k/32k chars (marker fidelity)
+==============================================================================
+CODE NOTE: server.mjs createInput() joins messages then slice(-12000). Body cap maxRequestBytes=1MB. Markers: HEAD at start, TAIL+question at end.
+  ctx=1000 FULL status=200 lat=3.33s out_chars=29 saw_head=True saw_tail=True finish=stop snippet=  HEAD=H1000XQ7 TAIL=T1000PL2 err=
+  ctx=4000 FULL status=200 lat=4.53s out_chars=29 saw_head=True saw_tail=True finish=stop snippet=  HEAD=H4000XQ7 TAIL=T4000PL2 err=
+  ctx=8000 FULL status=200 lat=4.75s out_chars=29 saw_head=True saw_tail=True finish=stop snippet=  HEAD=H8000XQ7 TAIL=T8000PL2 err=
+  ctx=16000 TRUNCATED_HEAD status=200 lat=23.30s out_chars=29 saw_head=False saw_tail=True finish=stop snippet=  HEAD=00158   TAIL=T16000PL2 err=
+  ctx=32000 TRUNCATED_HEAD status=200 lat=42.48s out_chars=22 saw_head=False saw_tail=True finish=stop snippet=  HEAD= TAIL=T32000PL2 err=
+CASE4 PASS full=[1000, 4000, 8000] truncated_head=[16000, 32000] other=[]
+FINDING: 上下文硬限制在代理层而不是上游窗口：约 12000 字符之后的前缀被 slice(-12000) 丢掉。8k 能记住开头标记，16k/32k 请求仍可能 HTTP 200，但开头标记消失。
+
+## PHASE long 18:15:11
+
+==============================================================================
+5) LONG GENERATION
+==============================================================================
+  status=200 lat=20.73s chars=1517 cjk=1322 approx_tokens=930 chars_per_s=73.2 finish=stop end_marker=True last_char='Y' err=
+  head=  京杭大运河的历史与现状  在京华烟云与江南水乡之间，一条蜿蜒三千里的水道，如苍龙般盘踞于华夏大地。它并非自然的恩赐，而是人力与意志的杰作，千百年来，它承载着王朝的漕粮、商贾的往来与文人的咏叹，直至今日，仍以崭新的姿容流淌在现代中国的肌理之中。这条河流，便是京杭大运河。  追溯其历史，大运河的雏形可远至春秋战国时期。吴王夫差为争霸中原，开凿邗沟，连接长江与淮水，虽只百十余里，却已开启了人工运河的滥觞。此后历代皆有疏浚与修筑，但真正奠定
+  tail=的对话。  今日的京杭大运河，早已不再是单纯的漕运工具，它被赋予了生态廊道、文化载体、旅游胜境与水利枢纽等多重身份。它既保留着隋唐以来的古老闸坝与石桥，又有着现代化河道的规整与通达。它像一条时间之河，将两千五百年的历史印记与当下中国的活力同时呈现于世人面前。站在河畔，江水汤汤，历史的风与今日的光交织在一起，那深邃而又灵动的川流，正无声地述说着一个民族如何在时间的褶皱中，既守护着往昔的记忆，又汲取着前行的勇气。  END_OF_ESSAY
+  max_tokens=8 status=200 chars=82 snippet=  1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 err=
+CASE5 PASS end_marker=True max_tokens_appears_honored=False
+FINDING: 长文完成标记存在，cjk=1322，耗时 20.7s，约 73 chars/s（启发式 tokens≈930，接口无 usage）。
+FINDING: max_tokens=8 未被遵守，实际输出 82 字符。该字段不会传给上游。
+
+## PHASE quality 18:15:36
+
+==============================================================================
+9) BILINGUAL / REASONING SMOKE (run before heavy load)
+==============================================================================
+  math_3x transport_ok=True quality_hit=True status=200 lat=2.81s chars=5 snippet=  x=9 err=
+  code_sum transport_ok=True quality_hit=True status=200 lat=6.74s chars=111 snippet=  ```python def sum_to(n):     # 使用等差数列求和公式计算 1 到 n 的和     return n * (n + 1) // 2  # sum_to(100) 的数值是 5050 ``` err=
+  translate transport_ok=True quality_hit=True status=200 lat=3.40s chars=61 snippet=  The weather is nice today, let's go for a walk in the park. err=
+CASE9 PASS quality_hits=3/3
+FINDING: 质量冒烟 3/3 命中（方程 x=9、sum_to(100)=5050、公园天气英译）。这是日常可用性的下限，不是评测榜。
+
+## PHASE bad 18:15:49
+
+==============================================================================
+8) BAD INPUTS
+==============================================================================
+  empty_body status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"Unexpected end of JSON input","type":"invalid_request_error"}}
+  malformed_brace status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"Expected property name or '}' in JSON at position 1","type":"invalid_request_error"}}
+  empty_object status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"messages must contain at least one text message","type":"invalid_request_error"}}
+  messages_empty status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"messages must contain at least one text message","type":"invalid_request_error"}}
+  content_missing status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"messages must contain at least one text message","type":"invalid_request_error"}}
+  content_empty_string status=200 lat=3.65s ctype=application/json; charset=utf-8 chars=32 err=  您好，请问有什么可以帮您？请具体描述您的问题，我会尽力解答。
+  content_number status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"messages must contain at least one text message","type":"invalid_request_error"}}
+  wrong_model status=200 lat=3.16s ctype=application/json; charset=utf-8 chars=4 err=  OK
+  body_over_1mb status=400 lat=0.00s ctype= chars=0 err={"error":{"message":"Request body exceeds 1 MB","type":"invalid_request_error"}}
+  health_after_bad=True pid=809995 rss=81656 kB
+CASE8 PASS wrong model id still completed (no whitelist); over_1mb=400 as designed
+FINDING: 错误 model id 不会被拒绝，请求照样打到上游。不能靠 model 字段做路由或鉴权。
+FINDING: 请求体超过 1MB 在读 body 时被本地拒绝（设计上限）。服务在异常输入后仍存活。
+
+## PHASE rapid 18:15:55
+
+==============================================================================
+7) RAPID FIRE 20 sequential
+==============================================================================
+  #1 status=200 lat=3.53s hit4=True err=
+  #2 status=200 lat=3.68s hit4=True err=
+  #3 status=200 lat=2.92s hit4=True err=
+  #4 status=200 lat=3.39s hit4=True err=
+  #5 status=200 lat=3.03s hit4=True err=
+  #6 status=200 lat=4.40s hit4=True err=
+  #7 status=200 lat=3.90s hit4=True err=
+  #8 status=200 lat=3.75s hit4=True err=
+  #9 status=200 lat=2.72s hit4=True err=
+  #10 status=200 lat=3.38s hit4=True err=
+  #11 status=200 lat=3.73s hit4=True err=
+  #12 status=200 lat=3.28s hit4=True err=
+  #13 status=200 lat=3.04s hit4=True err=
+  #14 status=200 lat=2.99s hit4=True err=
+  #15 status=200 lat=3.06s hit4=True err=
+  #16 status=200 lat=3.14s hit4=True err=
+  #17 status=200 lat=2.91s hit4=True err=
+  #18 status=200 lat=3.01s hit4=True err=
+  #19 status=200 lat=2.73s hit4=True err=
+  #20 status=200 lat=2.51s hit4=True err=
+SUMMARY rapid20: PASS success=20/20 (100.0%) wall=65.08s achieved_rps=0.31
+  latency_ok n=20 mean=3.25s p50=3.10s p95=3.93s min=2.51s max=4.40s
+  latency_all n=20 mean=3.25s p50=3.10s p95=3.93s min=2.51s max=4.40s
+  status_hist {"200": 20}
+  out_chars_ok mean=3 min=3 max=3
+CASE7 PASS last5/first5_lat_ratio=0.8638757624357544
+FINDING: 连续 20 次短请求未见明显封禁，成功率 100%，末5/前5延迟比 0.86。
+
+## PHASE ladder 18:17:01
+
+==============================================================================
+6) HOMOGENEOUS CONCURRENCY LADDER 1,3,5,10,20,30,50 short prompts
+==============================================================================
+pre_ladder pid=809995 rss=81860 kB health=True
+SUMMARY ladder_1: PASS success=1/1 (100.0%) wall=3.05s achieved_rps=0.33
+  latency_ok n=1 mean=3.05s p50=3.05s p95=3.05s min=3.05s max=3.05s
+  latency_all n=1 mean=3.05s p50=3.05s p95=3.05s min=3.05s max=3.05s
+  status_hist {"200": 1}
+  out_chars_ok mean=3 min=3 max=3
+  kind short: ok=1/1 n=1 mean=3.05s p50=3.05s p95=3.05s min=3.05s max=3.05s hit4=1/1
+  post pid=809995 rss=81392 kB health=True
+SUMMARY ladder_3: PASS success=3/3 (100.0%) wall=3.74s achieved_rps=0.80
+  latency_ok n=3 mean=3.63s p50=3.68s p95=3.73s min=3.46s max=3.74s
+  latency_all n=3 mean=3.63s p50=3.68s p95=3.73s min=3.46s max=3.74s
+  status_hist {"200": 3}
+  out_chars_ok mean=3 min=3 max=3
+  kind short: ok=3/3 n=3 mean=3.63s p50=3.68s p95=3.73s min=3.46s max=3.74s hit4=3/3
+  post pid=809995 rss=82680 kB health=True
+SUMMARY ladder_5: PASS success=5/5 (100.0%) wall=3.51s achieved_rps=1.42
+  latency_ok n=5 mean=3.16s p50=3.38s p95=3.49s min=2.75s max=3.51s
+  latency_all n=5 mean=3.16s p50=3.38s p95=3.49s min=2.75s max=3.51s
+  status_hist {"200": 5}
+  out_chars_ok mean=3 min=3 max=3
+  kind short: ok=5/5 n=5 mean=3.16s p50=3.38s p95=3.49s min=2.75s max=3.51s hit4=5/5
+  post pid=809995 rss=82728 kB health=True
+SUMMARY ladder_10: PASS success=10/10 (100.0%) wall=3.89s achieved_rps=2.57
+  latency_ok n=10 mean=3.32s p50=3.19s p95=3.87s min=2.63s max=3.89s
+  latency_all n=10 mean=3.32s p50=3.19s p95=3.87s min=2.63s max=3.89s
+  status_hist {"200": 10}
+  out_chars_ok mean=3 min=3 max=3
+  kind short: ok=10/10 n=10 mean=3.32s p50=3.19s p95=3.87s min=2.63s max=3.89s hit4=10/10
+  post pid=809995 rss=85756 kB health=True
+SUMMARY ladder_20: PASS success=20/20 (100.0%) wall=4.42s achieved_rps=4.53
+  latency_ok n=20 mean=3.42s p50=3.34s p95=4.09s min=2.61s max=4.41s
+  latency_all n=20 mean=3.42s p50=3.34s p95=4.09s min=2.61s max=4.41s
+  status_hist {"200": 20}
+  out_chars_ok mean=3 min=1 max=3
+  kind short: ok=20/20 n=20 mean=3.42s p50=3.34s p95=4.09s min=2.61s max=4.41s hit4=20/20
+  post pid=809995 rss=91452 kB health=True
+SUMMARY ladder_30: PASS success=28/30 (93.3%) wall=4.77s achieved_rps=6.29
+  latency_ok n=28 mean=3.65s p50=3.71s p95=4.57s min=2.75s max=4.76s
+  latency_all n=30 mean=3.66s p50=3.71s p95=4.54s min=2.75s max=4.76s
+  status_hist {"200": 30}
+  error_class {"unknown": 2}
+  SAMPLE_ERR status=200 lat=4.08s 
+  out_chars_ok mean=3 min=3 max=3
+  kind short: ok=28/30 n=28 mean=3.65s p50=3.71s p95=4.57s min=2.75s max=4.76s hit4=28/30
+  post pid=809995 rss=100984 kB health=True
+SUMMARY ladder_50: PASS success=50/50 (100.0%) wall=5.97s achieved_rps=8.37
+  latency_ok n=50 mean=3.65s p50=3.60s p95=4.85s min=2.65s max=5.97s
+  latency_all n=50 mean=3.65s p50=3.60s p95=4.85s min=2.65s max=5.97s
+  status_hist {"200": 50}
+  out_chars_ok mean=3 min=1 max=3
+  kind short: ok=50/50 n=50 mean=3.65s p50=3.60s p95=4.85s min=2.65s max=5.97s hit4=48/50
+  post pid=809995 rss=117656 kB health=True
+CASE6 PASS pass_levels=[1, 3, 5, 10, 20, 30, 50] degraded=[] fail=[]
+FINDING: 同质短请求并发：PASS 档 [1, 3, 5, 10, 20, 30, 50]，DEGRADED 无，FAIL 无。每档一次齐射，超时 45s。每个完成在代理内还会再打 3 个上游请求（secret、uuid、chat）。
+
+## PHASE multitask 18:17:51
+
+==============================================================================
+10) 多任务高并发极限 MULTI-TASK + HIGH CONCURRENCY
+==============================================================================
+Mix kinds per wave: short, stream, ctx(3000 chars), gen(~120 hanzi), math(17*23).
+Then burst workers=8 mixed for 180s, cooldown 90s with only health+1 short at each end, burst 120s.
+pre_multi pid=809995 rss=117656 kB
+SUMMARY mixed_10: PASS success=10/10 (100.0%) wall=6.32s achieved_rps=1.58
+  latency_ok n=10 mean=4.06s p50=3.85s p95=5.75s min=3.10s max=6.31s
+  latency_all n=10 mean=4.06s p50=3.85s p95=5.75s min=3.10s max=6.31s
+  ttfb_ok n=2 mean=4.05s p50=4.05s p95=4.19s min=3.89s max=4.20s
+  status_hist {"200": 10}
+  out_chars_ok mean=35 min=3 max=165
+  kind short: ok=2/2 n=2 mean=3.49s p50=3.49s p95=3.61s min=3.35s max=3.62s hit4=2/2
+  kind stream: ok=2/2 n=2 mean=4.24s p50=4.24s p95=4.39s min=4.08s max=4.40s hit4=2/2
+  kind ctx: ok=2/2 n=2 mean=3.28s p50=3.28s p95=3.44s min=3.10s max=3.46s head=2/2 tail=2/2
+  kind gen: ok=2/2 n=2 mean=5.69s p50=5.69s p95=6.25s min=5.06s max=6.31s
+  kind math: ok=2/2 n=2 mean=3.59s p50=3.59s p95=4.03s min=3.10s max=4.07s hit391=2/2
+  post mixed 10 health=True pid=809995 rss=117724 kB
+SUMMARY mixed_20: PASS success=20/20 (100.0%) wall=7.19s achieved_rps=2.78
+  latency_ok n=20 mean=4.42s p50=4.14s p95=6.73s min=2.85s max=7.18s
+  latency_all n=20 mean=4.42s p50=4.14s p95=6.73s min=2.85s max=7.18s
+  ttfb_ok n=4 mean=4.05s p50=4.13s p95=4.22s min=3.70s max=4.23s
+  status_hist {"200": 20}
+  out_chars_ok mean=50 min=3 max=332
+  kind short: ok=4/4 n=4 mean=3.51s p50=3.54s p95=3.96s min=3.01s max=3.97s hit4=4/4
+  kind stream: ok=4/4 n=4 mean=4.25s p50=4.33s p95=4.42s min=3.91s max=4.42s hit4=4/4
+  kind ctx: ok=4/4 n=4 mean=3.89s p50=3.82s p95=4.34s min=3.49s max=4.42s head=4/4 tail=4/4
+  kind gen: ok=4/4 n=4 mean=6.41s p50=6.32s p95=7.11s min=5.81s max=7.18s
+  kind math: ok=4/4 n=4 mean=4.05s p50=4.21s p95=4.83s min=2.85s max=4.91s hit391=4/4
+  post mixed 20 health=True pid=809995 rss=101588 kB
+SUMMARY mixed_30: PASS success=30/30 (100.0%) wall=7.11s achieved_rps=4.22
+  latency_ok n=30 mean=4.33s p50=3.91s p95=6.50s min=3.19s max=7.10s
+  latency_all n=30 mean=4.33s p50=3.91s p95=6.50s min=3.19s max=7.10s
+  ttfb_ok n=6 mean=3.66s p50=3.58s p95=4.12s min=3.41s max=4.25s
+  status_hist {"200": 30}
+  out_chars_ok mean=39 min=3 max=187
+  kind short: ok=6/6 n=6 mean=3.72s p50=3.74s p95=3.99s min=3.44s max=4.05s hit4=6/6
+  kind stream: ok=6/6 n=6 mean=3.85s p50=3.78s p95=4.31s min=3.59s max=4.45s hit4=6/6
+  kind ctx: ok=6/6 n=6 mean=3.62s p50=3.59s p95=4.07s min=3.19s max=4.16s head=6/6 tail=6/6
+  kind gen: ok=6/6 n=6 mean=6.25s p50=6.00s p95=7.04s min=5.71s max=7.10s
+  kind math: ok=6/6 n=6 mean=4.19s p50=4.02s p95=4.91s min=3.81s max=5.12s hit391=6/6
+  post mixed 30 health=True pid=809995 rss=96812 kB
+SUMMARY mixed_50: PASS success=49/50 (98.0%) wall=7.36s achieved_rps=6.79
+  latency_ok n=49 mean=4.29s p50=3.82s p95=6.54s min=2.95s max=7.35s
+  latency_all n=50 mean=4.27s p50=3.80s p95=6.52s min=2.95s max=7.35s
+  ttfb_ok n=10 mean=3.39s p50=3.43s p95=3.70s min=2.77s max=3.76s
+  status_hist {"200": 50}
+  error_class {"unknown": 1}
+  SAMPLE_ERR status=200 lat=3.35s 
+  out_chars_ok mean=37 min=3 max=197
+  kind short: ok=9/10 n=9 mean=3.86s p50=3.58s p95=4.85s min=3.09s max=4.94s hit4=9/10
+  kind stream: ok=10/10 n=10 mean=3.57s p50=3.62s p95=3.88s min=2.95s max=3.93s hit4=10/10
+  kind ctx: ok=10/10 n=10 mean=4.09s p50=3.55s p95=6.28s min=3.26s max=6.76s head=10/10 tail=10/10
+  kind gen: ok=10/10 n=10 mean=6.02s p50=6.02s p95=7.03s min=4.87s max=7.35s
+  kind math: ok=10/10 n=10 mean=3.87s p50=3.81s p95=4.30s min=3.36s max=4.31s hit391=10/10
+  post mixed 50 health=True pid=809995 rss=105268 kB
+BURST_START burstA_180s_w8 workers=8 duration=180s
+SUMMARY burstA_180s_w8: PASS success=367/370 (99.2%) wall=182.23s achieved_rps=2.03
+  latency_ok n=367 mean=3.92s p50=3.38s p95=6.22s min=2.12s max=20.93s
+  latency_all n=370 mean=3.92s p50=3.38s p95=6.22s min=2.12s max=20.93s
+  ttfb_ok n=73 mean=3.12s p50=3.00s p95=4.00s min=2.04s max=8.56s
+  status_hist {"200": 370}
+  error_class {"unknown": 2, "empty completion": 1}
+  SAMPLE_ERR status=200 lat=3.39s 
+  SAMPLE_ERR status=200 lat=3.22s empty completion
+  out_chars_ok mean=38 min=1 max=223
+  bucket 18:18:39 n=68 ok=68/68 (100%) n=68 mean=3.91s p50=3.35s p95=6.31s min=2.34s max=12.49s
+  bucket 18:19:09 n=62 ok=62/62 (100%) n=62 mean=3.90s p50=3.33s p95=6.21s min=2.47s max=12.31s
+  bucket 18:19:39 n=59 ok=59/59 (100%) n=59 mean=3.99s p50=3.38s p95=6.58s min=2.26s max=13.29s
+  bucket 18:20:09 n=61 ok=59/61 (97%) n=59 mean=4.05s p50=3.32s p95=6.29s min=2.23s max=20.93s
+  bucket 18:20:39 n=63 ok=63/63 (100%) n=63 mean=3.71s p50=3.50s p95=5.53s min=2.12s max=6.21s
+  bucket 18:21:09 n=57 ok=56/57 (98%) n=56 mean=3.99s p50=3.40s p95=5.82s min=2.47s max=15.58s
+  kind_counts {"stream": 74, "ctx3000": 75, "short": 74, "math": 74, "gen": 73}
+
+==============================================================================
+10b) COOLDOWN 90s then probe
+==============================================================================
+cooldown begin; no chat load for 90s except one probe now and one after
+  probe_start status=200 lat=3.08s ok=True err=
+  health_after_cooldown status=200 body={"status":"ok","upstream":"youdao-webfanyi"}
+  probe_end status=200 lat=3.94s ok=True err=
+BURST_START burstB_120s_w8 workers=8 duration=120s
+SUMMARY burstB_120s_w8: PASS success=229/231 (99.1%) wall=125.27s achieved_rps=1.84
+  latency_ok n=229 mean=4.22s p50=3.44s p95=6.76s min=2.27s max=42.38s
+  latency_all n=231 mean=4.21s p50=3.44s p95=6.73s min=2.04s max=42.38s
+  ttfb_ok n=46 mean=3.06s p50=3.13s p95=3.93s min=2.09s max=4.18s
+  status_hist {"200": 231}
+  error_class {"empty completion": 1, "unknown": 1}
+  SAMPLE_ERR status=200 lat=2.04s empty completion
+  SAMPLE_ERR status=200 lat=3.96s 
+  out_chars_ok mean=38 min=3 max=212
+  bucket 18:23:18 n=65 ok=64/65 (98%) n=64 mean=4.29s p50=3.52s p95=6.78s min=2.33s max=17.53s
+  bucket 18:23:48 n=52 ok=52/52 (100%) n=52 mean=4.20s p50=3.46s p95=7.44s min=2.37s max=20.90s
+  bucket 18:24:18 n=61 ok=61/61 (100%) n=61 mean=4.42s p50=3.33s p95=6.23s min=2.27s max=42.38s
+  bucket 18:24:48 n=53 ok=52/53 (98%) n=52 mean=3.93s p50=3.47s p95=6.00s min=2.29s max=13.32s
+  kind_counts {"ctx3000": 47, "stream": 47, "math": 45, "short": 45, "gen": 47}
+MULTI_WAVES pass=[10, 20, 30, 50] degraded=[] fail=[]
+BURST_A PASS rate=99.1891891891892 early=False n=370
+COOLDOWN probe2_ok=True
+BURST_B PASS rate=99.13419913419914 early=False n=231
+FINDING: 8 路混合突发可持续：A 99% / n=370，冷却 90s 后 B 99% / n=231。未见明显封禁。
+FINDING: 混合齐射 PASS 并发度 [10, 20, 30, 50]；DEGRADED 无；FAIL 无。
+CASE10 PASS
+
+## PHASE sustained 18:25:24
+
+==============================================================================
+11) SUSTAINED LIGHT LOAD ~10 min, 1 req / 25s
+==============================================================================
+  #1 t=18:25:27 status=200 lat=3.58s ok=True hit4=True err=
+  #2 t=18:25:53 status=200 lat=3.97s ok=True hit4=True err=
+  #3 t=18:26:19 status=200 lat=4.96s ok=True hit4=True err=
+  #4 t=18:26:42 status=200 lat=3.64s ok=True hit4=True err=
+  #5 t=18:27:08 status=200 lat=4.29s ok=True hit4=True err=
+  #6 t=18:27:33 status=200 lat=4.28s ok=True hit4=True err=
+  #7 t=18:27:58 status=200 lat=4.13s ok=True hit4=True err=
+  #8 t=18:28:23 status=200 lat=4.17s ok=True hit4=True err=
+  #9 t=18:28:48 status=200 lat=4.49s ok=True hit4=True err=
+  #10 t=18:29:13 status=200 lat=4.39s ok=True hit4=True err=
+  #11 t=18:29:38 status=200 lat=4.28s ok=True hit4=True err=
+  #12 t=18:30:04 status=200 lat=4.82s ok=True hit4=True err=
+  #13 t=18:30:27 status=200 lat=3.64s ok=True hit4=True err=
+  #14 t=18:30:53 status=200 lat=4.11s ok=True hit4=True err=
+  #15 t=18:31:17 status=200 lat=3.72s ok=True hit4=True err=
+  #16 t=18:31:43 status=200 lat=3.95s ok=True hit4=True err=
+  #17 t=18:32:07 status=200 lat=3.26s ok=True hit4=True err=
+  #18 t=18:32:33 status=200 lat=4.02s ok=True hit4=True err=
+  #19 t=18:32:58 status=200 lat=4.35s ok=True hit4=True err=
+  #20 t=18:33:23 status=200 lat=3.96s ok=True hit4=True err=
+  #21 t=18:33:48 status=200 lat=4.32s ok=True hit4=True err=
+  #22 t=18:34:13 status=200 lat=4.00s ok=True hit4=True err=
+  #23 t=18:34:39 status=200 lat=5.24s ok=True hit4=True err=
+  #24 t=18:35:02 status=200 lat=3.50s ok=True hit4=True err=
+SUMMARY sustained_10min: PASS success=24/24 (100.0%) wall=578.51s achieved_rps=0.04
+  latency_ok n=24 mean=4.13s p50=4.12s p95=4.94s min=3.26s max=5.24s
+  latency_all n=24 mean=4.13s p50=4.12s p95=4.94s min=3.26s max=5.24s
+  status_hist {"200": 24}
+  out_chars_ok mean=3 min=3 max=3
+CASE11 PASS requests=24 span=578.5s last5/first5=1.0282421711210998 health=True
+FINDING: 10 分钟轻载（每 25s 一次）成功率 100% ，延迟比末/前=1.03，结束后健康=True。
+
+## PHASE conclusion 18:35:02
+
+==============================================================================
+12) CONCLUSION 结论
+==============================================================================
+final_pid=809995 rss=95004 kB health=True at 2026-10-04 18:35:02 CST
+VERDICT case1 PASS
+VERDICT case2 PASS
+VERDICT case3 PASS
+VERDICT case4 PASS
+VERDICT case5 PASS
+VERDICT case6 PASS
+VERDICT case7 PASS
+VERDICT case8 PASS
+VERDICT case9 PASS
+VERDICT case10 PASS
+VERDICT case11 PASS
+--- findings ---
+- 模型列表只暴露 DeepSeek-V4；聊天请求里的 model 字段不会被校验，DeepSeek-V3 也能 200（id 只是回显）。源码 functionEnglishName 固定为 deepseek_r1，换 model id 不会切换上游模型。
+- 未传 stream 时默认走 SSE（源码 stream !== false），与 OpenAI 默认非流式不兼容。客户端必须显式 stream:false。
+- 同提示流式首包 ttfb=3.73s，非流式总耗时 3.96s。
+- 上下文硬限制在代理层而不是上游窗口：约 12000 字符之后的前缀被 slice(-12000) 丢掉。8k 能记住开头标记，16k/32k 请求仍可能 HTTP 200，但开头标记消失。
+- 长文完成标记存在，cjk=1322，耗时 20.7s，约 73 chars/s（启发式 tokens≈930，接口无 usage）。
+- max_tokens=8 未被遵守，实际输出 82 字符。该字段不会传给上游。
+- 质量冒烟 3/3 命中（方程 x=9、sum_to(100)=5050、公园天气英译）。这是日常可用性的下限，不是评测榜。
+- 错误 model id 不会被拒绝，请求照样打到上游。不能靠 model 字段做路由或鉴权。
+- 请求体超过 1MB 在读 body 时被本地拒绝（设计上限）。服务在异常输入后仍存活。
+- 连续 20 次短请求未见明显封禁，成功率 100%，末5/前5延迟比 0.86。
+- 同质短请求并发：PASS 档 [1, 3, 5, 10, 20, 30, 50]，DEGRADED 无，FAIL 无。每档一次齐射，超时 45s。每个完成在代理内还会再打 3 个上游请求（secret、uuid、chat）。
+- 8 路混合突发可持续：A 99% / n=370，冷却 90s 后 B 99% / n=231。未见明显封禁。
+- 混合齐射 PASS 并发度 [10, 20, 30, 50]；DEGRADED 无；FAIL 无。
+- 10 分钟轻载（每 25s 一次）成功率 100% ，延迟比末/前=1.03，结束后健康=True。
+--- limits ---
+硬限制 HARD:
+- 本地请求体 1MB，超过直接 400，不会打上游。
+- 拼好的对话文本只保留最后 12000 个 JS 字符（slice(-12000)），更长上下文静默丢前缀，HTTP 仍可能是 200。
+- 单请求链路固定 3 次上游调用：/translate_llm/secret、/translate_llm/v3/uuid/generate、/translate_llm/v3/chat。
+- 无 usage、无真实 finish_reason（恒为 stop）、不转发 max_tokens / temperature。model id 不参与上游选择。
+软限制 SOFT: 见并发阶梯、混合齐射、两次 burst 与轻载结论上面的 FINDING。
+DAILY: 适合单人、低并发、显式 stream:false 的日常聊天；不要依赖长上下文、max_tokens、model 路由或 >5 并发。
+MODEL_CHOICE: DeepSeek-V3 used for the suite after a live 200. DeepSeek-V4 also returned 200 on a one-off probe. Neither id changes upstream.
+END
+
+==============================================================================
+12b) ANALYST CORRECTION (overrides the auto DAILY line above)
+==============================================================================
+The script's DAILY sentence capped advice at ">5 concurrency" whenever any pass level was >=5. That heuristic is too conservative for this run. Measured ceiling was NOT reached.
+
+What failed to break:
+- No HTTP 429, no HTTP 502, no connection reset, no cooldown/ban across the whole suite.
+- Homogeneous short-chat volley: 1/3/5/10/20/30/50 all PASS. At 50: 50/50 HTTP 200, latency mean 3.65s p50 3.60s p95 4.85s max 5.97s, hit4=48/50. Server pid stayed 809995, health stayed ok. RSS grew 74MB -> ~118MB then settled ~95MB.
+- Ladder 30 was the weakest short volley: 28/30 non-empty (93.3%), both misses were HTTP 200 with empty/whitespace content, not an upstream error status.
+- Mixed waves (short + SSE + 3k context + ~120-char gen + 17*23) at 10, 20, 30, 50: all PASS. mixed_50 = 49/50, the miss again an empty 200. Per-kind quality inside the mix stayed high (ctx markers kept at 3k; math 391 hit; gen completed).
+- Burst A: 8 workers, mixed kinds, 180s, 367/370 (99.2%), ~2.03 completed req/s, p50 3.38s p95 6.22s, one slow 20.9s. No early abort. 30s buckets stayed 97-100%.
+- Cooldown 90s: probe before 3.08s and after 3.94s, both 200. Health 200.
+- Burst B: 120s, 229/231 (99.1%), ~1.84 req/s, p50 3.44s p95 6.76s, one outlier 42.4s. Buckets 98-100%. No degradation vs burst A, so no soft-ban after the first burst.
+- Rapid 20 sequential: 20/20, mean 3.25s p50 3.10s p95 3.93s, last5/first5 latency 0.86 (got slightly faster).
+- Sustained 24 short chats over 578s (every 25s, ~10 min): 24/24, mean 4.13s p50 4.12s p95 4.94s, last5/first5=1.03.
+
+Only soft failure mode seen: rare HTTP 200 with empty or near-empty content (about 2/30, 1/50, 3/370, 2/231). Not a rate-limit body. No error JSON on those.
+
+Hard limits that ARE real (code + behavior):
+- Input fidelity: 1k/4k/8k echoed both HEAD and TAIL. 16k and 32k returned 200 but lost the head marker (16k lat 23.3s, model echoed a filler number "00158" as HEAD; 32k lat 42.5s, HEAD blank, TAIL kept). Matches createInput().slice(-12000). Truncation is silent.
+- Body > 1MB: 400 "Request body exceeds 1 MB" in <10ms. Empty/malformed JSON and empty messages: 400 invalid_request_error (SyntaxError text contains "JSON", so it is 400 not 502).
+- Empty string content is NOT rejected: 200 and the model asked what you want.
+- Wrong model id "definitely-not-a-model": 200. /v1/models lists only DeepSeek-V4. Chat model field is an echo. Upstream functionEnglishName is hard-coded deepseek_r1. V3 and V4 probes both 200; they are not different models.
+- stream omitted => text/event-stream (OpenAI clients that expect JSON must pass stream:false). Same prompt: non-stream 3.96s / 81 chars; stream ttfb 3.73s total 4.52s / 93 chars. Both coherent.
+- max_tokens=8 ignored (model counted 1..30, 82 chars). No usage object. finish_reason always "stop" even when context was truncated.
+- Long essay: 1517 chars, 1322 CJK, 20.7s, ~73 chars/s, heuristic ~930 tokens, END_OF_ESSAY present, so this ask was not cut off. Not a measured max-output ceiling.
+- Each user completion fans out to 3 upstream calls (secret, uuid, chat). 50 parallel still worked, so this multiplier did not trip a visible quota today.
+
+Baseline n=5: mean 3.10s p50 2.99s p95 3.60s, 5/5 answered "4".
+Quality smoke 3/3: x=9, sum_to(100)=5050, English park/weather translation.
+
+DAILY VERDICT (corrected): usable as a daily single-user LLM proxy, and on this run also usable for moderate fan-out (tested through 50 in-flight and ~2 req/s mixed for several minutes) with no ban. Do not trust context beyond ~8k chars (hard cut at 12k with silent prefix drop), do not trust max_tokens/model id/finish_reason/usage, and always set stream:false unless you want SSE. Not an official API; upstream can change without a local code change. No git commit or push. Server left running, pid 809995.

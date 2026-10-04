@@ -9,7 +9,37 @@ const bootstrapKey = "EZAmCfVOH2CrBGMtPrtIPUzyv3bheLdk";
 const visitorId = randomBytes(16).toString("hex");
 const maxRequestBytes = 1024 * 1024;
 
-/** Build the signed parameters required by the webfanyi LLM endpoints. */
+/**
+ * Model id returned by `/v1/models` and chat completions.
+ * The upstream model answers as DeepSeek V3.
+ */
+const exposedModelId = "DeepSeek-V3";
+
+/**
+ * Internal luna-ai function name sent upstream.
+ * Clients never see this id; they use {@link exposedModelId}.
+ */
+const upstreamFunctionName = "deepseek_r1";
+
+/**
+ * Request ids that select the single upstream model.
+ * `DeepSeek-V4` is accepted only so older clients keep working, and every response reports DeepSeek-V3.
+ * @type {ReadonlySet<string>}
+ */
+const acceptedModelIds = new Set([exposedModelId, "DeepSeek-V4"]);
+
+/**
+ * Resolve a client model id to the public DeepSeek-V3 id.
+ * @param {unknown} requested Model from the OpenAI-style body. Empty selects the default.
+ * @returns {string}
+ */
+function resolveExposedModel(requested) {
+  if (requested == null || requested === "") return exposedModelId;
+  if (typeof requested === "string" && acceptedModelIds.has(requested)) return exposedModelId;
+  throw new Error(`Unknown model. Available model: ${exposedModelId}`);
+}
+
+/** Build the signed parameters required by the luna-ai chat endpoints. */
 function createSignedParams(extra, signingKey, keyId, keyfrom, client = "web") {
   const params = {
     product: "webfanyi", appVersion: "12.0.0", client, mid: 1, vendor: "web", screen: 1, model: 1, imei: 1,
@@ -40,7 +70,7 @@ async function createTaskId(token, secretKey) {
   return payload.data.id;
 }
 
-/** Collapse OpenAI-style messages into the webfanyi input field. */
+/** Collapse OpenAI-style messages into the upstream input field. */
 function createInput(messages) {
   return messages.map((message) => `${message.role === "assistant" ? "助手" : "用户"}：${message.content}`).join("\n\n").slice(-12000);
 }
@@ -48,7 +78,7 @@ function createInput(messages) {
 /** Create a correctly signed multipart request for the upstream chat endpoint. */
 function createChatForm({ messages, token, secretKey, taskId }) {
   const params = createSignedParams({
-    token, functionEnglishName: "deepseek_r1", input: encodeURIComponent(createInput(messages)), useTerm: 0,
+    token, functionEnglishName: upstreamFunctionName, input: encodeURIComponent(createInput(messages)), useTerm: 0,
     free: false, singleBox: false, fromLang: "auto", id: taskId, roundNo: 1, showSuggest: 0, source: "webaitrans",
   }, secretKey, "ai-translate-llm", "webfanyi.webaitrans", "webaitrans");
   const form = new FormData();
@@ -56,7 +86,7 @@ function createChatForm({ messages, token, secretKey, taskId }) {
   return form;
 }
 
-/** Parse webfanyi SSE while exposing only answer content to callers. */
+/** Parse upstream SSE while exposing only answer content to callers. */
 async function readYoudaoStream(upstream, onContent) {
   const decoder = new TextDecoder();
   let buffer = "";
@@ -99,7 +129,7 @@ async function readJsonRequest(request) {
   const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   const messages = Array.isArray(payload.messages) ? payload.messages.filter((message) => message && typeof message.content === "string") : [];
   if (!messages.length) throw new Error("messages must contain at least one text message");
-  return { messages, stream: payload.stream !== false, model: payload.model ?? "DeepSeek-V4" };
+  return { messages, stream: payload.stream !== false, model: resolveExposedModel(payload.model) };
 }
 
 /** Set safe CORS and no-cache headers for API responses. */
@@ -141,8 +171,8 @@ async function completeOnce(response, messages, model) {
 const server = createServer(async (request, response) => {
   try {
     if (request.method === "OPTIONS") { setBaseHeaders(response); response.writeHead(204); response.end(); return; }
-    if (request.method === "GET" && request.url === "/health") { writeJson(response, 200, { status: "ok", upstream: "youdao-webfanyi" }); return; }
-    if (request.method === "GET" && request.url === "/v1/models") { writeJson(response, 200, { object: "list", data: [{ id: "DeepSeek-V4", object: "model", owned_by: "youdao-webfanyi" }] }); return; }
+    if (request.method === "GET" && request.url === "/health") { writeJson(response, 200, { status: "ok", upstream: "youdao-luna" }); return; }
+    if (request.method === "GET" && request.url === "/v1/models") { writeJson(response, 200, { object: "list", data: [{ id: exposedModelId, object: "model", owned_by: "youdao-luna" }] }); return; }
     if (request.method === "POST" && request.url === "/v1/chat/completions") {
       const { messages, stream, model } = await readJsonRequest(request);
       if (stream) await streamCompletion(response, messages, model); else await completeOnce(response, messages, model);
@@ -151,10 +181,10 @@ const server = createServer(async (request, response) => {
     writeJson(response, 404, { error: { message: "Not found", type: "invalid_request_error" } });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";
-    const status = /messages|Request body|JSON/.test(message) ? 400 : 502;
+    const status = /messages|Request body|JSON|Unknown model/.test(message) ? 400 : 502;
     if (!response.headersSent) writeJson(response, status, { error: { message, type: status === 400 ? "invalid_request_error" : "upstream_error" } });
     else response.end();
   }
 });
 
-server.listen(port, host, () => console.log(`Youdao API listening at http://${host}:${port}`));
+server.listen(port, host, () => console.log(`Youdao Luna OpenAI proxy listening at http://${host}:${port}`));

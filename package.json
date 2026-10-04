@@ -1,7 +1,7 @@
 {
-  "name": "youdao-webfanyi-node-api",
+  "name": "youdao-luna-openai-proxy",
   "version": "0.1.0",
-  "description": "Local OpenAI-compatible streaming adapter for Youdao webfanyi LLM endpoints.",
+  "description": "Local OpenAI-compatible chat completions proxy for Youdao's web LLM (DeepSeek), not an official API, not a translate service.",
   "private": true,
   "type": "module",
   "engines": {

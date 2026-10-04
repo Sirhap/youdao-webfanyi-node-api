@@ -1,8 +1,21 @@
-# Youdao Webfanyi Node API
+# Youdao Luna OpenAI Proxy
 
-本地 Node.js 服务，将有道网页端 LLM SSE 转为 OpenAI 风格的 `/v1/chat/completions` 接口。
+本地 OpenAI 风格的聊天代理。它只提供三个接口：`GET /health`、`GET /v1/models`、`POST /v1/chat/completions`。上游是有道网页 LLM（[luna-ai](https://luna-ai.youdao.com)，函数名 `deepseek_r1`，回答为 DeepSeek V3）。这不是有道官方 API，也不是翻译服务。
 
-它不依赖浏览器、Cookie、CLI Proxy 或手动 API Key。每次请求动态获取临时凭据并在内存中计算签名；凭据不会返回给客户端或写入磁盘。
+不需要 API Key 或 Cookie。每次请求向 `https://luna-ai.youdao.com` 拉取临时凭据，只在内存里计算签名；凭据不会写到磁盘，也不会返回给客户端。
+
+## 能力边界
+
+可以接到 Codex 等客户端，当作纯聊天模型使用。工具调用、画图、子 agent、上下文压缩这些高级能力，需要客户端自己或其他正规 API 提供。本代理不实现它们。
+
+明确不支持：
+
+- `tools` / `function_call`（工具调用）
+- 画图、图像生成，以及多模态输入输出
+- 子 agent / 多 agent 编排 API
+- 服务端上下文压缩。超长对话只硬截最后 12000 个字符，前缀直接丢掉
+- `max_tokens`、`usage`，以及按 model id 路由到不同的真实上游模型
+- Codex 等客户端的高级能力（新绘画、子 agent、压缩上下文等）。这里只能当纯聊天后端
 
 ## Requirements
 
@@ -21,29 +34,52 @@ npm start
 curl http://127.0.0.1:8787/health
 ```
 
-## Chat completion
+## Models
+
+`GET /v1/models` 只列出一个模型：`DeepSeek-V3`。
+
+```bash
+curl http://127.0.0.1:8787/v1/models
+```
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "DeepSeek-V3", "object": "model", "owned_by": "youdao-luna" }
+  ]
+}
+```
+
+## Chat completions
+
+`POST /v1/chat/completions` 使用 OpenAI 风格的请求体。省略 `stream` 或传入 `true` 时返回 SSE；传入 `false` 时一次返回完整 JSON。
 
 ```bash
 curl http://127.0.0.1:8787/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "DeepSeek-V4",
+    "model": "DeepSeek-V3",
     "messages": [{"role": "user", "content": "你好"}],
     "stream": false
   }'
 ```
 
-传入 `"stream": true` 可获得 OpenAI 风格 SSE。
+流式响应是 OpenAI 风格的 `chat.completion.chunk`，以 `data: [DONE]` 结束。把上面的 `"stream": false` 改成 `true`，或直接删掉该字段即可。
+
+客户端应使用模型 id `DeepSeek-V3`。未知模型会返回 400。
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HOST` | `127.0.0.1` | Listener host. Keep this local unless you add your own authentication. |
-| `PORT` | `8787` | Listener port. |
-| `CORS_ORIGIN` | `*` | Allowed browser origin. |
-| `YOUDAO_ORIGIN` | `https://luna-ai.youdao.com` | Override only for controlled testing. |
+| `HOST` | `127.0.0.1` | 监听地址。保持本机，除非你自己加上鉴权。 |
+| `PORT` | `8787` | 监听端口。 |
+| `CORS_ORIGIN` | `*` | 允许的浏览器来源。 |
+| `YOUDAO_ORIGIN` | `https://luna-ai.youdao.com` | 仅在受控测试时覆盖上游地址。 |
 
 ## Notes
 
-This is a local protocol adapter for the Youdao web client, not an official Youdao API. The upstream endpoint and request protocol may change. Do not expose this service on a public network without adding authentication, rate limiting, and access controls.
+上游地址和请求协议可能随时变化，本仓库不保证长期兼容。不要把这个服务暴露到公网：默认没有鉴权。若必须对外提供，请自行加上认证、限流和访问控制。
+
+当前能做什么、不能依赖什么，见 [docs/能力边界.md](docs/能力边界.md)。2026-10-04（Asia/Shanghai）的限额与压力测试见 [docs/压测报告.md](docs/压测报告.md)，原始日志见 [docs/evidence/youdao-luna-proxy-limit-test-2026-10-04.txt](docs/evidence/youdao-luna-proxy-limit-test-2026-10-04.txt)。那次实测可以作为单人日常代理，也撑住了测到的中等并发；不要信任大约 8k 字符以上的上下文。
